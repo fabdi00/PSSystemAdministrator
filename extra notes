@@ -1,0 +1,90 @@
+LastLogon vs LastLogonTimeStamp
+
+In Get-InactiveUser take care with checking LastLogon, it doesn't get replicated between domain controllers, and if you have more than one domain controller and the user authenticated with a different one, they might be active but show as inactive. Take a look at LastLogonTimeStamp which does replicate between domain controllers. Possibly the same in Get-InactiveComputer too.
+
+Might miss logged on users
+
+In Get-ComputerCurrentUser it's possible to have more than one user logged into a computer (with session switching, RDP, and more). Here in Get-UserActiveLogon you are only expecting one username, so you might miss some logged on users who weren't the last username and don't show up.
+
+Might miss files / report incorrect sizes
+
+In Get-SubDirectorySize you need to add -Force to Get-ChildItem so it will include hidden and system files, otherwise you'll miss a bunch of folders like ProgramData and hidden config folders in people's profiles and so on. (It could be possible to speed this up by using RoboCopy in List mode with file sizes included, but it would be quite a change to the code to make that work well).
+
+Whatif might be useful
+
+It wouldn't be very hard to make the Move- and Remove- ones support -WhatIf and -Confirm options, if you wanted that.
+
+Possible remoting performance improvement
+
+Generally you're doing classic remoting with things like WMI and opening remote registry keys - for some of the tasks it might be a lot faster to use PowerShell remoting, e.g. Get-ComputerSoftware could use Invoke-Command to run a scriptblock to the remote computer, read the registry keys locally, and return the results, much quicker than sending browse requests for each registry key back and forth over the network. This might not be enabled/available on your network.
+
+Streaming is more the PowerShell style
+
+Where you have the pattern:
+
+begin{
+    $computerIPList = @()
+}
+
+process{
+    $computerIPList += ...
+}
+
+end {
+    return $computerIPList
+}
+It would be more in PowerShell style - and less code - to output the items straight from the process {} block, and not store them at all. That way the user, or the next function in the pipeline, can see or start working on the first item as soon as it's available instead of waiting for the last one to be computed. It makes sense where you do a sort at the end before outputting[1], but e.g. in Get-LargeFiles is there a benefit in storing them up, waiting until the last large file is found before the first one can be seen? (Could add -Force there too, in case there are hidden/system large files).
+
+[1] it's also powershell style to let the user add |sort-object after, if they want sorted results.
+
++= is slow
+
+As well in that pattern, the += operation is relatively slow, PowerShell has to rebuild the array and copy everything in it and rebuild it +1 size bigger every time instead of quickly tacking something onto the end. I'm not sure it makes much difference in the simpler functions, but in something like Get-ComputerSoftware where you could be adding dozens of registry keys for many computers, or Get-DirectorySize (which could get a -Force too) it might make a noticable speed difference to swap it for a proper container that can add extra things quickly, e.g.:
+
+begin{
+    $computerIPList = [System.Collections.Generic.List[psobject]]::new()
+}
+
+process{
+    $computerIPList.Add(...)
+}
+Can assign from result of a switch
+
+Small matter of saving effort writing, this switch pattern:
+
+    switch($SelfPrefixlength){
+        30 {$SubnetMask = "255.255.255.252"}
+        29 {$SubnetMask = "255.255.255.248"}
+        ...
+    }
+can be changed to assign $SubnetMask once instead of lots of times:
+
+    $SubnetMask = switch($SelfPrefixlength){
+        30 {"255.255.255.252"}
+        29 {"255.255.255.248"}
+        ...
+    }
+Does it or doesn't it?
+
+This:
+
+[cmdletbinding()]#Does not take objects from the pipeline
+param(
+    [parameter(ValueFromPipeline=$true
+🤔
+
+Match or Equals
+
+Here where you have
+
+Where-Object -Property Enabled -Match False
+That's doing a regex text comparison on a true/false boolean value. It works, but it's more direct to do:
+
+Where-Object -Property Enabled -eq $false
+Mapped drives are per-user
+
+Might be that Get-ComputerMappedNetworkDrive is inconsistent because drives aren't mapped per-computer, they're mapped per-user, so I expect you'll only see the drives mapped by the user you remote in as, rather than the user logged in at the console.
+
+Ask the DNS server for IP details directly
+
+A few places where you get an IP address through Test-Connection, could consider Resolve-DnsName -Type A; might be faster to just ask DNS and not try to contact the machine after.
